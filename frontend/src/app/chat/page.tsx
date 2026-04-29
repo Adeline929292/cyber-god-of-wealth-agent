@@ -1,3 +1,7 @@
+"use client"
+
+import * as React from "react"
+
 import { PageShell } from "@/components/page-shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -5,7 +9,44 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress"
 import { Textarea } from "@/components/ui/textarea"
 
+type SavingGoal = {
+  id: number
+  name: string
+  target_amount: number
+  current_amount: number
+}
+
+function getApiBaseUrl() {
+  return process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"
+}
+
+function yuanFromCents(cents: number) {
+  return (cents / 100).toFixed(2)
+}
+
+function clampProgress(value: number) {
+  if (!Number.isFinite(value)) return 0
+  return Math.max(0, Math.min(100, value))
+}
+
 export default function ChatPage() {
+  const [goalState, setGoalState] = React.useState<{ status: "loading" | "ready" | "down"; goal: SavingGoal | null }>({
+    status: "loading",
+    goal: null,
+  })
+
+  React.useEffect(() => {
+    const baseUrl = getApiBaseUrl()
+    fetch(`${baseUrl}/api/goals/current`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: SavingGoal | null) => setGoalState({ status: "ready", goal: data }))
+      .catch(() => setGoalState({ status: "down", goal: null }))
+  }, [])
+
+  const progress = goalState.goal
+    ? clampProgress(Math.round((goalState.goal.current_amount / Math.max(goalState.goal.target_amount, 1)) * 100))
+    : 0
+
   return (
     <PageShell title="开始劝退我" description="左侧聊天，右侧目标卡片。Task 1 先把脚手架跑通。">
       <div className="grid gap-4 lg:grid-cols-[1fr_360px]">
@@ -48,12 +89,22 @@ export default function ChatPage() {
             <CardDescription>右侧卡片固定展示，聊天随时参考</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-1">
-              <div className="text-sm font-medium">日本旅行基金</div>
-              <div className="text-sm text-slate-600">4200 / 10000</div>
-            </div>
-            <Progress value={42} />
-            <div className="text-sm text-slate-600">进度：42%</div>
+            {goalState.goal ? (
+              <>
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">{goalState.goal.name}</div>
+                  <div className="text-sm text-slate-600">
+                    {yuanFromCents(goalState.goal.current_amount)} / {yuanFromCents(goalState.goal.target_amount)}
+                  </div>
+                </div>
+                <Progress value={progress} />
+                <div className="text-sm text-slate-600">进度：{progress}%</div>
+              </>
+            ) : (
+              <div className="rounded-lg border bg-slate-50 p-4 text-sm text-slate-600">
+                {goalState.status === "down" ? "目标服务未连接。" : "还没有目标。先去创建一个。"}
+              </div>
+            )}
             <Button variant="outline" className="w-full" asChild>
               <a href="/goals">去设置 / 编辑目标</a>
             </Button>
@@ -63,4 +114,3 @@ export default function ChatPage() {
     </PageShell>
   )
 }
-
