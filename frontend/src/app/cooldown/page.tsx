@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useSearchParams } from "next/navigation"
 
 import { PageShell } from "@/components/page-shell"
 import { Badge } from "@/components/ui/badge"
@@ -35,6 +36,7 @@ function personaLabel(persona: string) {
 }
 
 export default function CooldownPage() {
+  const searchParams = useSearchParams()
   const [items, setItems] = React.useState<CooldownListItem[]>([])
   const [selectedId, setSelectedId] = React.useState<number | null>(null)
   const [detail, setDetail] = React.useState<CooldownDetail | null>(null)
@@ -63,12 +65,15 @@ export default function CooldownPage() {
     loadList()
       .then((list) => {
         if (list.length) {
-          setSelectedId(list[0].purchase_intent_id)
+          const idFromQuery = searchParams.get("id")
+          const parsed = idFromQuery ? Number.parseInt(idFromQuery, 10) : NaN
+          const matched = Number.isFinite(parsed) ? list.find((x) => x.purchase_intent_id === parsed) : undefined
+          setSelectedId(matched ? matched.purchase_intent_id : list[0].purchase_intent_id)
         }
         setStatus("ready")
       })
       .catch(() => setStatus("down"))
-  }, [])
+  }, [searchParams])
 
   React.useEffect(() => {
     if (!selectedId) {

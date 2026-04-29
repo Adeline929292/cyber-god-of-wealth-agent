@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useSearchParams } from "next/navigation"
 
 import { PageShell } from "@/components/page-shell"
 import { Badge } from "@/components/ui/badge"
@@ -95,6 +96,7 @@ type Message = {
 }
 
 export default function ChatPage() {
+  const searchParams = useSearchParams()
   const [sessionState, setSessionState] = React.useState<{
     status: "loading" | "ready" | "down"
     sessionId?: string
@@ -117,10 +119,17 @@ export default function ChatPage() {
   const [persona, setPersona] = React.useState<"auto" | "cyber_caishen" | "toxic_bestie">("auto")
   const [llmEnabled, setLlmEnabled] = React.useState(false)
   const [llmProvider, setLlmProvider] = React.useState<"openai" | "qwen" | "deepseek">("openai")
+  const [copiedId, setCopiedId] = React.useState<string | null>(null)
   const [providerState, setProviderState] = React.useState<
     | { status: "loading" | "down"; enabledMap: Record<string, boolean> }
     | { status: "ready"; enabledMap: Record<string, boolean> }
   >({ status: "loading", enabledMap: {} })
+
+  React.useEffect(() => {
+    const preset = searchParams.get("preset")
+    if (preset === "blindbox") setDraft("我好想花 800 块买个盲盒")
+    if (preset === "airpods") setDraft("想买 AirPods，1299 元")
+  }, [searchParams])
 
   React.useEffect(() => {
     const baseUrl = getApiBaseUrl()
@@ -159,6 +168,14 @@ export default function ChatPage() {
     : 0
 
   const canSend = draft.trim().length > 0 && sessionState.status === "ready" && !sending
+
+  async function copyText(id: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedId(id)
+      window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1200)
+    } catch {}
+  }
 
   async function sendMessage(text: string) {
     const baseUrl = getApiBaseUrl()
@@ -248,6 +265,19 @@ export default function ChatPage() {
                             <div className="flex items-center justify-between gap-2">
                               <div className="text-sm font-medium">结论</div>
                               <div className="flex items-center gap-2">
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => void copyText(m.id, m.payload?.assistant_message ?? m.content)}
+                                >
+                                  {copiedId === m.id ? "已复制" : "复制建议"}
+                                </Button>
+                                {m.payload.purchase_intent_id ? (
+                                  <Button type="button" size="sm" variant="ghost" asChild>
+                                    <a href={`/cooldown?id=${m.payload.purchase_intent_id}`}>打开清单</a>
+                                  </Button>
+                                ) : null}
                                 <Badge variant={m.payload.decision.result === "discourage" ? "secondary" : "default"}>
                                   {decisionLabel(m.payload.decision.result)}
                                 </Badge>
