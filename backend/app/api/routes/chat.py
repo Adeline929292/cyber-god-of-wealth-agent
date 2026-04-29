@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -10,7 +11,11 @@ from sqlmodel import Session, desc, select
 
 from app.db.session import get_session
 from app.models.chat_session import ChatSession
+from app.models.cooldown_list import CooldownList
+from app.models.price_quote import PriceQuote
+from app.models.purchase_intent import PurchaseIntent
 from app.models.saving_goal import SavingGoal
+from app.models.user import User
 
 router = APIRouter()
 
@@ -87,6 +92,18 @@ def _get_goal_for_request(session: Session, goal_id: int | None, session_id: str
 
     statement = select(SavingGoal).order_by(desc(SavingGoal.updated_at)).limit(1)
     return session.exec(statement).first()
+
+
+def _get_or_create_default_user(session: Session) -> User:
+    user = session.get(User, 1)
+    if user is not None:
+        return user
+
+    user = User(id=1, display_name="默认用户")
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
 
 
 def _format_yuan(cents: int) -> str:
@@ -201,6 +218,67 @@ def build_advice(persona: str, result: str, intent: ParsedIntent, impact: dict, 
     return f"{item} {price_yuan} 元我不表态。你先把底价和你买它的理由讲清楚，别用冲动当借口。"
 
 
+def _persist_discourage(
+    session: Session,
+    user_id: int,
+    goal: SavingGoal,
+    chat_session_id: str | None,
+    intent: ParsedIntent,
+    currency: str,
+    decision: str,
+    persona: str,
+    advice_text: str,
+    best_price: int | None,
+    save_vs_best: int | None,
+    eta_shift_days: int | None,
+    quotes: list[dict],
+    cooldown_items: list[dict],
+) -> int:
+    purchase_intent = PurchaseIntent(
+        user_id=user_id,
+        goal_id=goal.id,
+        session_id=chat_session_id,
+        item_name=intent.item_name,
+        stated_price=intent.price,
+        chosen_price=intent.price or 0,
+        currency=currency,
+        reason=intent.reason,
+        decision=decision,
+        persona=persona,
+        advice_text=advice_text,
+        best_price=best_price,
+        save_vs_best=save_vs_best,
+        eta_shift_days=eta_shift_days,
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(purchase_intent)
+    session.commit()
+    session.refresh(purchase_intent)
+
+    for q in quotes:
+        session.add(
+            PriceQuote(
+                purchase_intent_id=purchase_intent.id,
+                source=q["source"],
+                price=q["price"],
+                url=q.get("url"),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+    session.commit()
+
+    session.add(
+        CooldownList(
+            purchase_intent_id=purchase_intent.id,
+            items_json=json.dumps(cooldown_items, ensure_ascii=False),
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+
+    return int(purchase_intent.id)
+
+
 @router.post("/chat")
 def chat(payload: ChatRequest, session: Session = Depends(get_session)):
     request_id = f"req_{int(datetime.now(timezone.utc).timestamp() * 1000)}"
@@ -218,6 +296,7 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
             "decision": {"result": "neutral", "persona": "cyber_caishen"},
             "impact": None,
             "price_comparison": None,
+            "purchase_intent_id": None,
             "cooldown": {"items": []},
         }
 
@@ -233,17 +312,38 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
             "decision": {"result": "neutral", "persona": "cyber_caishen"},
             "impact": None,
             "price_comparison": None,
+            "purchase_intent_id": None,
             "cooldown": {"items": []},
         }
 
     quotes = _mock_quotes_for_item(intent.item_name)
     best = min(quotes, key=lambda q: q["price"])
-    save_vs_current = max(0, price - best["price"])
+    save_vs_best = max(0, price - best["price"])
 
     impact = compute_impact(goal, price)
-    result, persona = decide(impact, save_vs_current)
+    result, persona = decide(impact, save_vs_best)
     assistant_message = build_advice(persona, result, intent, impact, best["price"])
     cooldown_items = build_cooldown_items(result)
+
+    purchase_intent_id: int | None = None
+    if result == "discourage":
+        user = _get_or_create_default_user(session)
+        purchase_intent_id = _persist_discourage(
+            session=session,
+            user_id=int(user.id),
+            goal=goal,
+            chat_session_id=payload.session_id,
+            intent=intent,
+            currency=payload.currency,
+            decision=result,
+            persona=persona,
+            advice_text=assistant_message,
+            best_price=best["price"],
+            save_vs_best=save_vs_best,
+            eta_shift_days=impact.get("eta_shift_days"),
+            quotes=quotes,
+            cooldown_items=cooldown_items,
+        )
 
     return {
         "request_id": request_id,
@@ -255,8 +355,9 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
         "price_comparison": {
             "quotes": quotes,
             "best": {"source": best["source"], "price": best["price"]},
-            "save_vs_current": save_vs_current,
+            "save_vs_current": save_vs_best,
         },
+        "purchase_intent_id": purchase_intent_id,
         "cooldown": {"items": cooldown_items},
     }
 

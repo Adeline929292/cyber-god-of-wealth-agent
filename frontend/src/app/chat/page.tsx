@@ -46,6 +46,7 @@ type ChatResponse = {
         save_vs_current: number
       }
     | null
+  purchase_intent_id: number | null
   cooldown: { items: Array<{ text: string; checked: boolean }> }
 }
 
