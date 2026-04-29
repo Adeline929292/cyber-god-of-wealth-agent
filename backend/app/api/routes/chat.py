@@ -4,11 +4,13 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlmodel import Session, desc, select
 
+from app.core.config import get_settings
 from app.db.session import get_session
 from app.models.chat_session import ChatSession
 from app.models.cooldown_list import CooldownList
@@ -26,7 +28,8 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1)
     explicit_price: int | None = Field(default=None, ge=1, description="单位：分")
     currency: str = "CNY"
-    llm_provider: str | None = None
+    persona: Literal["auto", "cyber_caishen", "toxic_bestie"] = "auto"
+    llm_provider: Literal["openai", "qwen", "deepseek"] | None = None
     llm_enabled: bool = False
 
 
@@ -167,6 +170,41 @@ def decide(impact: dict, save_vs_best: int | None) -> tuple[str, str]:
 
 def _hash_flag(seed: str) -> int:
     return sum(seed.encode("utf-8")) % 2
+
+
+def _provider_enabled(provider: str) -> bool:
+    settings = get_settings()
+    if provider == "openai":
+        return bool(settings.openai_api_key)
+    if provider == "qwen":
+        return bool(settings.qwen_api_key)
+    if provider == "deepseek":
+        return bool(settings.deepseek_api_key)
+    return False
+
+
+def _enhance_with_llm_style(
+    base_text: str,
+    provider: str,
+    persona: str,
+    result: str,
+    item_name: str,
+    price: int,
+    best_price: int | None,
+) -> str:
+    best_part = f"底价约 {_format_yuan(best_price)} 元" if best_price is not None else "底价未知"
+    if persona == "cyber_caishen":
+        if result == "discourage":
+            return f"{base_text}\n\n（{provider} 增强）神谕补充：{item_name} 这单不急，{best_part}。把 {price/100:.2f} 元挪去目标里，明天的你会更喜欢你。"
+        if result == "encourage":
+            return f"{base_text}\n\n（{provider} 增强）神谕补充：可以买，但只在“预算内 + 低价”成立时出手。"
+        return f"{base_text}\n\n（{provider} 增强）神谕补充：信息不全时先别冲动，先比价再决定。"
+
+    if result == "discourage":
+        return f"{base_text}\n\n（{provider} 增强）闺蜜补刀：你现在想买的是情绪，不是 {item_name}。{best_part}，先把手从付款键拿开。"
+    if result == "encourage":
+        return f"{base_text}\n\n（{provider} 增强）闺蜜补刀：行，但别上头，别加购，别凑单，买完就走。"
+    return f"{base_text}\n\n（{provider} 增强）闺蜜补刀：你先讲清楚你要解决什么问题，再聊值不值。"
 
 
 def build_cooldown_items(result: str) -> list[dict]:
@@ -321,8 +359,20 @@ def chat(payload: ChatRequest, session: Session = Depends(get_session)):
     save_vs_best = max(0, price - best["price"])
 
     impact = compute_impact(goal, price)
-    result, persona = decide(impact, save_vs_best)
+    result, decided_persona = decide(impact, save_vs_best)
+    persona = decided_persona if payload.persona == "auto" else payload.persona
+
     assistant_message = build_advice(persona, result, intent, impact, best["price"])
+    if payload.llm_enabled and payload.llm_provider and _provider_enabled(payload.llm_provider):
+        assistant_message = _enhance_with_llm_style(
+            assistant_message,
+            payload.llm_provider,
+            persona,
+            result,
+            intent.item_name,
+            price,
+            best["price"],
+        )
     cooldown_items = build_cooldown_items(result)
 
     purchase_intent_id: int | None = None

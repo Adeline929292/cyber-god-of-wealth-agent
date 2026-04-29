@@ -114,6 +114,13 @@ export default function ChatPage() {
   ])
   const [draft, setDraft] = React.useState("")
   const [sending, setSending] = React.useState(false)
+  const [persona, setPersona] = React.useState<"auto" | "cyber_caishen" | "toxic_bestie">("auto")
+  const [llmEnabled, setLlmEnabled] = React.useState(false)
+  const [llmProvider, setLlmProvider] = React.useState<"openai" | "qwen" | "deepseek">("openai")
+  const [providerState, setProviderState] = React.useState<
+    | { status: "loading" | "down"; enabledMap: Record<string, boolean> }
+    | { status: "ready"; enabledMap: Record<string, boolean> }
+  >({ status: "loading", enabledMap: {} })
 
   React.useEffect(() => {
     const baseUrl = getApiBaseUrl()
@@ -134,6 +141,17 @@ export default function ChatPage() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((data: SavingGoal | null) => setGoalState({ status: "ready", goal: data }))
       .catch(() => setGoalState({ status: "down", goal: null }))
+
+    fetch(`${baseUrl}/api/llm/providers`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data: { providers: Array<{ name: string; enabled: boolean }> }) => {
+        const enabledMap: Record<string, boolean> = {}
+        data.providers.forEach((p) => {
+          enabledMap[p.name] = p.enabled
+        })
+        setProviderState({ status: "ready", enabledMap })
+      })
+      .catch(() => setProviderState({ status: "down", enabledMap: {} }))
   }, [])
 
   const progress = goalState.goal
@@ -161,7 +179,9 @@ export default function ChatPage() {
           message: text,
           explicit_price: null,
           currency: "CNY",
-          llm_enabled: false,
+          persona,
+          llm_provider: llmProvider,
+          llm_enabled: llmEnabled,
         }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -305,6 +325,53 @@ export default function ChatPage() {
             </div>
 
             <div className="grid gap-2">
+              <div className="grid gap-2 rounded-lg border bg-white p-3">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    人格
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                      value={persona}
+                      onChange={(e) => setPersona(e.target.value as typeof persona)}
+                    >
+                      <option value="auto">自动</option>
+                      <option value="cyber_caishen">赛博财神</option>
+                      <option value="toxic_bestie">毒舌闺蜜</option>
+                    </select>
+                  </label>
+
+                  <label className="grid gap-1 text-xs text-slate-600">
+                    LLM Provider
+                    <select
+                      className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                      value={llmProvider}
+                      onChange={(e) => setLlmProvider(e.target.value as typeof llmProvider)}
+                    >
+                      <option value="openai">openai</option>
+                      <option value="qwen">qwen</option>
+                      <option value="deepseek">deepseek</option>
+                    </select>
+                  </label>
+
+                  <label className="flex items-center gap-2 text-xs text-slate-600">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={llmEnabled}
+                      onChange={(e) => setLlmEnabled(e.target.checked)}
+                    />
+                    启用 LLM（可选增强）
+                  </label>
+                </div>
+                {llmEnabled ? (
+                  <div className="text-xs text-slate-500">
+                    {providerState.status === "ready" && providerState.enabledMap[llmProvider]
+                      ? "当前 Provider 已配置 Key，将返回“增强模式”文案"
+                      : "当前 Provider 未配置 Key，将自动降级为模板模式（不影响可演示）"}
+                  </div>
+                ) : null}
+              </div>
+
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"

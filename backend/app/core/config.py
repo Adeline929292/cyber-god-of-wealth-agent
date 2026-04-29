@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
     auto_create_db_dir: bool = True
 
+    openai_api_key: str | None = None
+    qwen_api_key: str | None = None
+    deepseek_api_key: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:
